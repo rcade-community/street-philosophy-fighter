@@ -1,0 +1,85 @@
+# Managed by Project Launcher v1
+name: Publish via Project Launcher
+run-name: Launcher ${{ inputs.request }}
+'on':
+  workflow_dispatch:
+    inputs:
+      request:
+        required: true
+        type: string
+      revision:
+        required: true
+        type: string
+      artifact_run:
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: project-launcher-pages
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+      actions: read
+    steps:
+      - uses: actions/configure-pages@v5
+        id: pages
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+        if: inputs.artifact_run == ''
+      - uses: pnpm/action-setup@v4
+        if: inputs.artifact_run == ''
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+        if: inputs.artifact_run == ''
+      - run: pnpm install --frozen-lockfile
+        if: inputs.artifact_run == ''
+      - run: pnpm run build --base "$PAGES_BASE"
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}/
+        if: inputs.artifact_run == ''
+      - uses: actions/download-artifact@v4
+        if: inputs.artifact_run != ''
+        with:
+          name: launcher-release
+          path: dist
+          run-id: ${{ inputs.artifact_run }}
+          github-token: ${{ github.token }}
+      - name: Verify static output
+        run: |-
+          test -f dist/index.html
+          test -z "$(find dist -type l -print -quit)"
+          test -z "$(find dist -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' -o -name '*.map' \) -print -quit)"
+          printf '%s\n' "$RELEASE" > dist/launcher-release.txt
+        env:
+          RELEASE: ${{ inputs.revision }}
+      - uses: actions/upload-artifact@v4
+        if: inputs.artifact_run == ''
+        with:
+          name: launcher-release
+          path: dist
+          retention-days: 90
+          include-hidden-files: true
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
